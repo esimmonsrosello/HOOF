@@ -15,7 +15,6 @@ import time
 import re
 from dotenv import load_dotenv
 from typing import List, Dict
-from anthropic import Anthropic
 from datetime import datetime
 from Bio.Data import CodonTable
 
