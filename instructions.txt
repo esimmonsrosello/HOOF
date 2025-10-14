@@ -1,57 +1,32 @@
-Instructions to Set Up and Run a Python Project with Streamlit (macOS/Linux)
-
-1. Open Terminal and navigate to your project folder:
+# 1. Navigate to your project folder
 cd "/path/to/your/project/folder"
 
-2. Create a virtual environment (only needed the first time):
+Copy rest into Terminal
+
+# 2. Create a virtual environment (only needed the first time)
 python3 -m venv .venv
 
-3. Activate the virtual environment:
+# 3. Activate the virtual environment
 source .venv/bin/activate
-(Note: You should see "(.venv)" at the start of the terminal prompt.)
 
-4. Install dependencies from requirements.txt:
-pip3 install -r requirements.txt
+# 4. IMPORTANT: Upgrade pip first
+pip install --upgrade pip
 
-5. Run the Streamlit app:
-streamlit run HOOF.py
-(A browser window should open automatically.)
+# 5. Install wheel and setuptools
+pip install wheel setuptools
 
-6. Stop the app when done:
-Press CTRL + C in the terminal.
-
-7. Deactivate the virtual environment:
-deactivate
-
-
-
-Instructions to Set Up and Run a Python Project with Streamlit (Windows)
-
-1. Open PowerShell or Command Prompt and navigate to your project folder:
-cd "C:\path\to\your\project\folder"
-
-2. Create a virtual environment (only needed the first time):
-python -m venv .venv
-
-3. Activate the virtual environment:
-
-In PowerShell:
-.venv\Scripts\Activate.ps1
-
-In Command Prompt:
-.venv\Scripts\activate.bat
-
-(Note: You should see "(.venv)" at the start of the prompt in PowerShell.)
-
-4. Install dependencies from requirements.txt:
+# 6. Install dependencies from requirements.txt
 pip install -r requirements.txt
 
-5. Run the Streamlit app:
+# 7. Verify installations
+python -c "import streamlit; import plotly; import matplotlib; print('All packages installed successfully!')"
+
+# 8. Run the Streamlit app
 streamlit run HOOF.py
-(A browser window should open automatically.)
 
-6. Stop the app when done:
-Press CTRL + C in the terminal.
+# When done:
+# 9. Stop the app: Press CTRL + C in terminal
+# 10. Deactivate the virtual environment: deactivate
 
-7. Deactivate the virtual environment:
-deactivate
+
+
