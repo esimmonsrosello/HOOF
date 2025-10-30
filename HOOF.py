@@ -1,14 +1,29 @@
+"""
+HOOF - DNA Codon Optimization Tool
+Last updated: 20251022
+
+This tool helps optimize DNA sequences to reduce ribosomal frameshifting while maintaining
+proper codon usage. It handles both single sequences and batch processing with multiple
+optimization strategies.
+"""
+
+# Core libraries for the web interface
 import streamlit as st
 import streamlit.components.v1 as components
+
+# Data handling and numerical operations
 import pandas as pd
 import numpy as np
+
+# Visualization libraries
 import matplotlib.pyplot as plt
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+
+# System and utility imports
 import os
 import logging
 from collections import defaultdict, Counter
-from Bio.Seq import Seq
 import io
 import requests
 import time
@@ -16,40 +31,44 @@ import re
 from dotenv import load_dotenv
 from typing import List, Dict
 from datetime import datetime
+
+# BioPython for sequence manipulation
+from Bio.Seq import Seq
 from Bio.Data import CodonTable
 
 
-
-# Configure page
+# Set up the Streamlit page - this has to be the first Streamlit command
 st.set_page_config(
     page_title="HOOF",
-    page_icon=":horse:",
-    layout="wide",
-    initial_sidebar_state="expanded"
+    page_icon=":horse:",  # Shows a horse emoji in the browser tab
+    layout="wide",  # Use full width of the browser
+    initial_sidebar_state="expanded"  # Start with sidebar open
 )
 
-# Configuration and Constants
-BIAS_WEIGHT_DEFAULT = 0.5
-FRAME_OFFSET = 1
-VALID_DNA_BASES = 'ATGC'
+# Application-wide constants
+BIAS_WEIGHT_DEFAULT = 0.5  # Default weight for balancing codon bias vs other factors
+FRAME_OFFSET = 1  # Offset for reading frame analysis
+VALID_DNA_BASES = 'ATGC'  # Valid nucleotides (no U since we're working with DNA)
 CONFIG_FILE = "codon_optimizer_config.json"
 DEFAULT_CONFIG = {
-    "codon_file_path": "HumanCodons.xlsx",
+    "codon_file_path": "HumanCodons.xlsx",  # Where we load codon usage data from
     "bias_weight": BIAS_WEIGHT_DEFAULT,
     "auto_open_files": True,
     "default_output_dir": "."
 }
 
-# Add to the THEMES dictionary
+# Theme definitions for data visualization
+# Each theme provides different color palettes for various chart types
+# This allows users to customize the look or choose colorblind-friendly options
 THEMES = {
     "Default": {
         "info": "Default color scheme with vibrant, high-contrast colors.",
         "colors": {
-            "utr5": "#1900FF",
-            "cds": "#4ECDC4", 
-            "utr3": "#FF6B6B",
-            "signal_peptide": "#8A2BE2",
-            "optimization": {'original': '#FF8A80', 'optimized': '#4ECDC4'},
+            "utr5": "#1900FF",  # 5' UTR regions
+            "cds": "#4ECDC4",  # Coding sequence
+            "utr3": "#FF6B6B",  # 3' UTR regions
+            "signal_peptide": "#8A2BE2",  # Signal peptide sequences
+            "optimization": {'original': '#FF8A80', 'optimized': '#4ECDC4'},  # Before/after colors
             "analysis": ['#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4', '#FECA57', '#FF9FF3', '#54A0FF', '#5F27CD'],
             "gradient": ['#E3F2FD', '#BBDEFB', '#90CAF9', '#64B5F6', '#42A5F5', '#2196F3', '#1E88E5', '#1976D2']
         }
@@ -78,15 +97,16 @@ THEMES = {
             "gradient": ['#FFF3E0', '#FFE0B2', '#FFCC80', '#FFB74D', '#FFA726', '#FF9800', '#FB8C00', '#F57C00']
         }
     },
-    # COLOR-BLIND FRIENDLY THEMES
+    # --- COLOR-BLIND FRIENDLY THEMES ---
+    # These themes are designed to be distinguishable by people with color vision deficiencies
     "Colorblind Safe": {
         "info": "High contrast colors optimized for colorblind users (deuteranopia/protanopia safe).",
         "colors": {
-            "utr5": "#000000",      # Black
-            "cds": "#E69F00",       # Orange
-            "utr3": "#56B4E9",      # Sky Blue
+            "utr5": "#000000",      # Black - always distinguishable
+            "cds": "#E69F00",       # Orange - safe choice
+            "utr3": "#56B4E9",      # Sky Blue - works for most types of colorblindness
             "signal_peptide": "#009E73",  # Bluish Green
-            "optimization": {'original': '#CC79A7', 'optimized': '#E69F00'},  # Pink -> Orange
+            "optimization": {'original': '#CC79A7', 'optimized': '#E69F00'},  # Pink to Orange
             "analysis": ['#E69F00', '#56B4E9', '#009E73', '#F0E442', '#0072B2', '#D55E00', '#CC79A7', '#000000'],
             "gradient": ['#FFF2CC', '#FFE699', '#FFD966', '#FFCC33', '#E69F00', '#CC8F00', '#B37F00', '#996F00']
         }
@@ -94,10 +114,10 @@ THEMES = {
     "High Contrast": {
         "info": "Maximum contrast theme for accessibility.",
         "colors": {
-            "utr5": "#000000",      # Black
-            "cds": "#FFFFFF",       # White
-            "utr3": "#FF0000",      # Red
-            "signal_peptide": "#00FF00",  # Green
+            "utr5": "#000000",      # Pure black
+            "cds": "#FFFFFF",       # Pure white
+            "utr3": "#FF0000",      # Pure red
+            "signal_peptide": "#00FF00",  # Pure green
             "optimization": {'original': '#FF0000', 'optimized': '#00FF00'},
             "analysis": ['#000000', '#FFFFFF', '#FF0000', '#00FF00', '#0000FF', '#FFFF00', '#FF00FF', '#00FFFF'],
             "gradient": ['#CCCCCC', '#AAAAAA', '#888888', '#666666', '#444444', '#222222', '#111111', '#000000']
@@ -116,17 +136,21 @@ THEMES = {
         }
     }
 }
-# --- App Theme CSS --- (for styling the Streamlit UI itself)
+# CSS styling for the Streamlit app itself (not the charts)
+# These styles change the background colors and text colors of the interface
 APP_THEMES_CSS = {
-    "Default": "",  
+    "Default": "",  # No custom CSS - uses Streamlit's default styling
     "Oceanic": """
         <style>
+            /* Light blue background for main app area */
             [data-testid="stAppViewContainer"] {
                 background-color: #F0F8FF;
             }
+            /* Slightly darker blue for sidebar */
             [data-testid="stSidebar"] {
                 background-color: #E0F7FA;
             }
+            /* Dark teal text for better contrast */
             h1, h2, h3, h4, h5, h6, p, label, .st-emotion-cache-16txtl3, .st-emotion-cache-1jicfl2 {
                 color: #004D40;
             }
@@ -134,12 +158,15 @@ APP_THEMES_CSS = {
     """,
     "Sunset": """
         <style>
+            /* Warm cream background */
             [data-testid="stAppViewContainer"] {
                 background-color: #FFF3E0;
             }
+            /* Light orange sidebar */
             [data-testid="stSidebar"] {
                 background-color: #FFE0B2;
             }
+            /* Dark brown text for warmth */
             h1, h2, h3, h4, h5, h6, p, label, .st-emotion-cache-16txtl3, .st-emotion-cache-1jicfl2 {
                 color: #5D4037;
             }
@@ -148,54 +175,58 @@ APP_THEMES_CSS = {
 }
 
 def inject_app_theme():
-    """Injects the CSS for the currently selected theme."""
+    """Applies the selected theme's CSS to the Streamlit interface"""
     theme_css = APP_THEMES_CSS.get(st.session_state.active_theme, "")
     if theme_css:
         st.markdown(theme_css, unsafe_allow_html=True)
 
 
-# Initialize session state
+# Initialize Streamlit session state variables
+# Session state persists data across reruns of the app (when user interacts with widgets)
 if 'config' not in st.session_state:
     st.session_state.config = DEFAULT_CONFIG.copy()
 if 'active_theme' not in st.session_state:
     st.session_state.active_theme = "Default"
 if 'accumulated_results' not in st.session_state:
-    st.session_state.accumulated_results = []
+    st.session_state.accumulated_results = []  # Stores results from multiple single-sequence runs
 if 'batch_accumulated_results' not in st.session_state:
-    st.session_state.batch_accumulated_results = []
+    st.session_state.batch_accumulated_results = []  # Stores results from multiple batch runs
 if 'run_counter' not in st.session_state:
-    st.session_state.run_counter = 0
+    st.session_state.run_counter = 0  # Tracks how many optimizations we've done
 if 'genetic_code' not in st.session_state:
-    st.session_state.genetic_code = {}
+    st.session_state.genetic_code = {}  # Codon to amino acid mapping
 if 'codon_weights' not in st.session_state:
-    st.session_state.codon_weights = {}
+    st.session_state.codon_weights = {}  # Usage frequencies for each codon
 if 'preferred_codons' not in st.session_state:
-    st.session_state.preferred_codons = {}
+    st.session_state.preferred_codons = {}  # Most common codon for each amino acid
 if 'human_codon_usage' not in st.session_state:
-    st.session_state.human_codon_usage = {}
+    st.session_state.human_codon_usage = {}  # Human-specific codon usage data
 if 'aa_to_codons' not in st.session_state:
-    st.session_state.aa_to_codons = defaultdict(list)
+    st.session_state.aa_to_codons = defaultdict(list)  # Maps amino acid to its possible codons
 
 
-
-# Load environment variables
+# Load any environment variables from .env file (if it exists)
 load_dotenv()
 
-# Setup logging
+# Configure logging to track what the app is doing
+# Logs go both to a file and to the console
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler('codon_optimizer.log'),
-        logging.StreamHandler()
+        logging.FileHandler('codon_optimizer.log'),  # Save to file
+        logging.StreamHandler()  # Also print to console
     ]
 )
 logger = logging.getLogger(__name__)
 
-# Define constants
-Slippery_Motifs = {"TTTT", "TTTC"}
-PLUS1_STOP_CODONS = {"TAA", "TAG"}
-PLUS1_STOP_MOTIFS = {"TAATAA", "TAGTAG", "TAGTAA", "TAATAG"}
+# Biological constants for frame analysis
+Slippery_Motifs = {"TTTT", "TTTC"}  # Sequences that can cause ribosomal slipping
+PLUS1_STOP_CODONS = {"TAA", "TAG"}  # Stop codons in the +1 reading frame
+PLUS1_STOP_MOTIFS = {"TAATAA", "TAGTAG", "TAGTAA", "TAATAG"}  # Double stops in +1 frame
+
+# The standard genetic code - maps each 3-letter codon to its amino acid
+# '*' represents stop codons
 STANDARD_GENETIC_CODE = {
     'TTT': 'F', 'TTC': 'F', 'TTA': 'L', 'TTG': 'L', 'CTT': 'L', 'CTC': 'L', 'CTA': 'L', 'CTG': 'L',
     'ATT': 'I', 'ATC': 'I', 'ATA': 'I', 'GTT': 'V', 'GTC': 'V', 'GTA': 'V', 'GTG': 'V',
@@ -209,51 +240,79 @@ STANDARD_GENETIC_CODE = {
     'TAA': '*', 'TAG': '*', 'TGA': '*'
 }
 
+# Create a dictionary mapping amino acids to their synonymous codons
+# This is used throughout the optimization algorithms
 synonymous_codons = defaultdict(list)
 for codon_val, aa_val in STANDARD_GENETIC_CODE.items(): 
     synonymous_codons[aa_val].append(codon_val)
 
-# Synonymous Codons (Mapping AA -> List[Codon]) 
+# Alternative name for the same thing (kept for compatibility)
 NC_synonymous_codons = defaultdict(list)
 for codon, aa in STANDARD_GENETIC_CODE.items():
     NC_synonymous_codons[aa].append(codon)
     
+# Amino acids that commonly appear at slippery sites
+# These are used in frame-shift detection
 FIRST_AA_CANDIDATES = ['L', 'I', 'V']
 SECOND_AA_CANDIDATES = ['V', 'I']
 
-# Utility Functions
+# --- UTILITY FUNCTIONS ---
+
 def calculate_gc_window(sequence, position, window_size=25):
-    """Calculate GC content for a sliding window around a given position"""
+    """
+    Calculate GC content for a sliding window around a position.
+    
+    This helps us see if there are GC-rich or GC-poor regions in the sequence.
+    High GC content can affect RNA stability and translation.
+    
+    Args:
+        sequence: DNA sequence string
+        position: Amino acid position (1-based indexing)
+        window_size: Size of the window in base pairs (default 25bp)
+    
+    Returns:
+        GC percentage as a float (0-100)
+    """
     # Convert position from 1-based to 0-based indexing
     center_pos = (position - 1) * 3  # Convert amino acid position to nucleotide position
     
-    # Calculate window boundaries
+    # Figure out the window boundaries, making sure we don't go past the sequence ends
     start = max(0, center_pos - window_size // 2)
     end = min(len(sequence), center_pos + window_size // 2 + 1)
     
-    # Extract window sequence
+    # Grab the sequence in this window
     window_seq = sequence[start:end]
     
     if len(window_seq) == 0:
         return 0.0
     
-    # Calculate GC content
+    # Count G's and C's, calculate percentage
     gc_count = sum(1 for base in window_seq.upper() if base in 'GC')
     return (gc_count / len(window_seq)) * 100
 
 @st.cache_data
 def load_immunogenic_peptides(file_path="epitope_table_export.xlsx"):
-    """Load immunogenic peptides from Excel file"""
+    """
+    Load immunogenic peptides from an Excel file.
+    
+    This data is used to check if our optimized sequences might contain peptides
+    that could trigger immune responses. Cached so we only load it once.
+    
+    Args:
+        file_path: Path to the Excel file with epitope data
+    
+    Returns:
+        Cleaned DataFrame with peptide sequences, or empty DataFrame if file not found
+    """
     try:
         if os.path.exists(file_path):
             df = pd.read_excel(file_path)
             
-            
-            
-            # Clean column names - remove extra spaces and handle duplicates
+            # Clean up column names - Excel files can be messy
             df.columns = df.columns.str.strip()
             
-            # Handle duplicate column names by keeping only the first occurrence
+            # Handle duplicate column names by numbering them
+            # (sometimes Excel exports create duplicate headers)
             seen_columns = {}
             new_columns = []
             for col in df.columns:
@@ -266,8 +325,8 @@ def load_immunogenic_peptides(file_path="epitope_table_export.xlsx"):
             
             df.columns = new_columns
             
-            
-            
+            # Try to find the column that contains the actual peptide sequences
+            # Different files might call it different things
             name_column = None
             possible_name_columns = ['Name', 'Name_1', 'Name_2', 'Name_3']
             
@@ -276,34 +335,26 @@ def load_immunogenic_peptides(file_path="epitope_table_export.xlsx"):
                     name_column = col
                     break
             
+            # If we still haven't found it, just use the 3rd column (common format)
             if name_column is None and len(df.columns) >= 3:
-                name_column = df.columns[2]  # 3rd column (0-indexed)
+                name_column = df.columns[2]
                 
-            
             if name_column is None:
                 st.error(f"Could not find Name column. Available columns: {list(df.columns)}")
                 return pd.DataFrame()
             
-            
-            
-            
-            
-            # Clean and prepare the data
+            # Clean up the peptide data
             df_clean = df.dropna(subset=[name_column])
             df_clean = df_clean[df_clean[name_column].notna()]
             df_clean[name_column] = df_clean[name_column].astype(str).str.upper().str.strip()
             
-            # Filter out very short sequences and invalid entries
+            # Filter out junk - sequences that are too short or invalid
             df_clean = df_clean[df_clean[name_column].str.len() >= 3]
             df_clean = df_clean[df_clean[name_column] != 'NAN']
             df_clean = df_clean[df_clean[name_column] != '']
             
-            # Store the column name for later use
+            # Remember which column has the sequences for later
             df_clean.attrs['epitope_column'] = name_column
-            
-            
-            
-           
             
             return df_clean
         else:
@@ -315,19 +366,38 @@ def load_immunogenic_peptides(file_path="epitope_table_export.xlsx"):
         return pd.DataFrame()
 
 def get_consistent_color_palette(n_colors, palette_type="optimization"):
-    """Generate consistent color palettes for charts based on the active theme"""
+    """
+    Generate color palettes that match the currently selected theme.
+    Keeps charts visually consistent with the selected theme.
+    
+    Args:
+        n_colors: How many colors we need
+        palette_type: Type of palette - "optimization", "analysis", or "gradient"
+    
+    Returns:
+        List of color hex codes or dict for optimization type
+    """
     theme_colors = THEMES[st.session_state.active_theme]["colors"]
     
     if palette_type == "optimization":
         return theme_colors["optimization"]
     elif palette_type == "analysis":
+        # Cycle through the analysis colors if we need more than available
         base_colors = theme_colors["analysis"]
         return [base_colors[i % len(base_colors)] for i in range(n_colors)]
     elif palette_type == "gradient":
         return theme_colors["gradient"]
 
 def display_copyable_sequence(sequence, label, key_suffix=""):
-    """Display sequence in a copyable format"""
+    """
+    Show a DNA/RNA sequence in a text box that's easy to copy.
+    Users can select all with Ctrl+A and copy with Ctrl+C.
+    
+    Args:
+        sequence: The DNA/RNA sequence to display
+        label: Text to show above the box
+        key_suffix: Unique identifier for this text area (needed by Streamlit)
+    """
     st.text_area(
         label,
         sequence,
@@ -338,54 +408,81 @@ def display_copyable_sequence(sequence, label, key_suffix=""):
 
 
 
-
 def find_coding_sequence_bounds(dna_seq):
-    """Find start and stop positions of coding sequence, prioritizing ACCATG."""
-    dna_seq_upper = dna_seq.upper().replace('U', 'T')
+    """
+    Find where the actual coding sequence starts and ends in a DNA sequence.
+    
+    We prioritize finding the Kozak consensus sequence (ACCATG) because that's usually
+    where translation really starts in eukaryotes. If we can't find that, we fall back
+    to just finding the first ATG.
+    
+    Args:
+        dna_seq: The full DNA sequence (may include UTRs)
+    
+    Returns:
+        tuple: (start_position, end_position) of the CDS, or (None, None) if not found
+    """
+    dna_seq_upper = dna_seq.upper().replace('U', 'T')  # Handle RNA input too
     stop_codons = {"TAA", "TAG", "TGA"}
     
     start_pos = None
     
-    # Always prioritize finding the ACCATG Kozak sequence.
+    # Look for the Kozak sequence first - ACCATG
+    # This is the most common translation initiation context in mammals
     accatg_pos = dna_seq_upper.find('ACCATG')
     if accatg_pos != -1:
-        # The actual start codon (ATG) begins 3 bases into "ACCATG".
+        # ATG starts 3 bases into ACCATG
         start_pos = accatg_pos + 3
     else:
-        # Fallback: if no ACCATG, find the first occurrence of ATG.
+        # No Kozak? Just find the first ATG then
         atg_pos = dna_seq_upper.find('ATG')
         if atg_pos != -1:
-            # The sequence starts at the beginning of the first ATG found.
             start_pos = atg_pos
             
     if start_pos is None:
-        # If no start codon is found at all, we can't proceed.
+        # No start codon at all - can't do anything
         return None, None
     
-    # Find end position - first in-frame stop codon, starting from our found start_pos.
+    # Now find the end - first in-frame stop codon after our start
     end_pos = None
-    for i in range(start_pos, len(dna_seq_upper) - 2, 3):
+    for i in range(start_pos, len(dna_seq_upper) - 2, 3):  # Step by 3 to stay in frame
         codon = dna_seq_upper[i:i+3]
         if len(codon) == 3 and codon in stop_codons:
-            end_pos = i  # Position of the stop codon itself.
+            end_pos = i
             break
             
     return start_pos, end_pos
 
 
 def create_interactive_cai_gc_plot(positions, cai_weights, amino_acids, sequence, seq_name, color='#4ECDC4'):
-    """Create interactive plot combining CAI weights and GC content"""
+    """
+    Create an interactive plot showing CAI weights and GC content together.
     
-    # Calculate 10bp window GC content for each position
+    This helps visualize codon quality (CAI) alongside GC content patterns.
+    The two metrics are plotted on separate Y-axes since they have different scales.
+    
+    Args:
+        positions: List of amino acid positions
+        cai_weights: CAI weight at each position (0-1 scale)
+        amino_acids: The actual amino acid at each position
+        sequence: Full DNA sequence
+        seq_name: Name for the plot title
+        color: Color for the CAI line
+    
+    Returns:
+        Plotly figure object with interactive features
+    """
+    
+    # Calculate GC content in 25bp windows around each position
     gc_content_10bp = [calculate_gc_window(sequence, pos, 25) for pos in positions]
     
-    # Create subplot with secondary y-axis
+    # Create a plot with two Y-axes (one for CAI, one for GC%)
     fig = make_subplots(
         specs=[[{"secondary_y": True}]],
         subplot_titles=[f'CAI Weights and 25bp GC Content - {seq_name}']
     )
     
-    # Add CAI weights trace
+    # Add the CAI trace (primary Y-axis)
     fig.add_trace(
         go.Scatter(
             x=positions,
@@ -400,7 +497,7 @@ def create_interactive_cai_gc_plot(positions, cai_weights, amino_acids, sequence
         secondary_y=False,
     )
     
-    # Add GC content trace
+    # Add the GC content trace (secondary Y-axis)
     theme_colors = get_consistent_color_palette(1, "optimization")
     fig.add_trace(
         go.Scatter(
@@ -415,19 +512,17 @@ def create_interactive_cai_gc_plot(positions, cai_weights, amino_acids, sequence
         secondary_y=True,
     )
     
-    # Set x-axis title
+    # Set up the axes
     fig.update_xaxes(title_text="Amino Acid Position")
-    
-    # Set y-axes titles
     fig.update_yaxes(title_text="CAI Weight", secondary_y=False, range=[0, 1])
     fig.update_yaxes(title_text="GC Content (%)", secondary_y=True, range=[0, 100])
     
-    # Update layout
+    # Configure the overall layout
     fig.update_layout(
         height=500,
-        hovermode='x unified',
+        hovermode='x unified',  # Show all values at once when hovering
         legend=dict(
-            orientation="h",
+            orientation="h",  # Horizontal legend
             yanchor="bottom",
             y=1.02,
             xanchor="right",
@@ -439,11 +534,29 @@ def create_interactive_cai_gc_plot(positions, cai_weights, amino_acids, sequence
     return fig
 
 def create_interactive_cai_stop_codon_plot(positions, cai_weights, amino_acids, stop_codon_positions, seq_name, frame_type, color='#4ECDC4'):
-    """Create interactive plot combining CAI weights and stop codon locations"""
+    """
+    Create an interactive plot showing CAI weights with stop codon locations.
+    
+    Stop codons are shown as vertical bars to highlight where premature termination
+    could occur in alternate reading frames. This is crucial for identifying
+    potential frame-shifting issues.
+    
+    Args:
+        positions: Amino acid positions along the sequence
+        cai_weights: CAI weight at each position
+        amino_acids: Amino acids at each position
+        stop_codon_positions: Where stop codons appear in the alternate frame
+        seq_name: Sequence name for the title
+        frame_type: Which frame we're analyzing (+1, +2, etc.)
+        color: Color for the CAI line
+    
+    Returns:
+        Plotly figure with CAI line and stop codon bars
+    """
     
     fig = make_subplots(specs=[[{"secondary_y": True}]])
     
-    # Add CAI weights trace
+    # Add the CAI weights as a line plot
     fig.add_trace(
         go.Scatter(
             x=positions,
@@ -458,15 +571,15 @@ def create_interactive_cai_stop_codon_plot(positions, cai_weights, amino_acids, 
         secondary_y=False,
     )
     
-    # Add stop codon bars
+    # Add stop codons as bars if we found any
     if stop_codon_positions:
         theme_colors = get_consistent_color_palette(1, "optimization")
         fig.add_trace(
             go.Bar(
                 x=stop_codon_positions,
-                y=[1] * len(stop_codon_positions), # Bars will go up to y=1 on secondary axis
+                y=[1] * len(stop_codon_positions),  # Bars extend to full height of secondary axis
                 name=f'{frame_type} Stop Codons',
-                marker_color=theme_colors['original'],  # Use theme color for stops
+                marker_color=theme_colors['original'],
                 opacity=0.6,
                 width=0.8,
                 hovertemplate='<b>Position:</b> %{x}<br><b>Stop Codon</b><extra></extra>'
@@ -474,14 +587,12 @@ def create_interactive_cai_stop_codon_plot(positions, cai_weights, amino_acids, 
             secondary_y=True,
         )
 
-    # Set x-axis title
+    # Configure the axes
     fig.update_xaxes(title_text="Amino Acid Position")
-    
-    # Set y-axes titles
     fig.update_yaxes(title_text="CAI Weight", secondary_y=False, range=[0, 1])
     fig.update_yaxes(title_text="Stop Codon", secondary_y=True, showticklabels=False, range=[0, 1])
     
-    # Update layout
+    # Set up the layout
     fig.update_layout(
         title=f'CAI Weights and {frame_type} Stop Codon Locations - {seq_name}',
         height=500,
@@ -499,12 +610,15 @@ def create_interactive_cai_stop_codon_plot(positions, cai_weights, amino_acids, 
     return fig
 
 def create_interactive_bar_chart(x_data, y_data, labels, title, color_scheme='viridis'):
-    """Create interactive bar chart using the active theme"""
+    """
+    Create a themed interactive bar chart.
+    Colors automatically match the selected theme.
+    """
     theme_analysis_colors = get_consistent_color_palette(len(x_data), "analysis")
     fig = go.Figure(data=go.Bar(
         x=x_data,
         y=y_data,
-        text=[f'{val:.1f}' for val in y_data],
+        text=[f'{val:.1f}' for val in y_data],  # Show values on bars
         textposition='auto',
         marker_color=theme_analysis_colors,
         hovertemplate='<b>%{x}</b><br>Value: %{y:.2f}<extra></extra>'
@@ -521,15 +635,18 @@ def create_interactive_bar_chart(x_data, y_data, labels, title, color_scheme='vi
     return fig
 
 def create_interactive_pie_chart(values, labels, title, show_percentages=True):
-    """Create interactive pie chart using the active theme"""
+    """
+    Create an interactive pie chart with theme colors.
+    Useful for showing codon usage distribution or other proportional data.
+    """
     theme_colors = THEMES[st.session_state.active_theme]["colors"]["analysis"]
     
-    # Create color list matching the number of labels
+    # Match colors to the number of slices we need
     chart_colors = []
     for i in range(len(labels)):
         chart_colors.append(theme_colors[i % len(theme_colors)])
     
-    # For single sequence analysis, show absolute numbers
+    # Show either percentages or absolute counts
     textinfo = 'label+percent' if show_percentages else 'label+value'
     
     fig = go.Figure(data=go.Pie(
@@ -539,7 +656,7 @@ def create_interactive_pie_chart(values, labels, title, show_percentages=True):
         textinfo=textinfo,
         marker=dict(
             colors=chart_colors,
-            line=dict(color='#FFFFFF', width=2)  # White borders for better definition
+            line=dict(color='#FFFFFF', width=2)  # White borders between slices
         )
     ))
     
@@ -556,19 +673,23 @@ def create_interactive_pie_chart(values, labels, title, show_percentages=True):
             yanchor="middle",
             y=0.5,
             xanchor="left",
-            x=1.05
+            x=1.05  # Position legend to the right
         ),
-        margin=dict(l=20, r=120, t=50, b=20)  # Adjust margins for legend
+        margin=dict(l=20, r=120, t=50, b=20)
     )
     
     return fig
 
 def create_interactive_comparison_chart(sequences, original_values, optimized_values, metric_name, y_title):
-    """Create interactive before/after comparison chart"""
+    """
+    Create a before/after comparison chart.
+    Shows original vs optimized values side-by-side for easy comparison.
+    """
     fig = go.Figure()
     
     colors = get_consistent_color_palette(1, "optimization")
     
+    # Original values in one color
     fig.add_trace(go.Bar(
         name='Original',
         x=sequences,
@@ -577,6 +698,7 @@ def create_interactive_comparison_chart(sequences, original_values, optimized_va
         hovertemplate='<b>%{x}</b><br>Original ' + metric_name + ': %{y}<extra></extra>'
     ))
     
+    # Optimized values in another color
     fig.add_trace(go.Bar(
         name='Optimized',
         x=sequences,
@@ -589,7 +711,7 @@ def create_interactive_comparison_chart(sequences, original_values, optimized_va
         title=f'{metric_name}: Before vs After Optimization',
         xaxis_title='Sequence',
         yaxis_title=y_title,
-        barmode='group',
+        barmode='group',  # Bars side-by-side, not stacked
         height=500,
         hovermode='x unified'
     )
@@ -597,7 +719,10 @@ def create_interactive_comparison_chart(sequences, original_values, optimized_va
     return fig
 
 def create_interactive_stacked_bar_chart(x_data, y_data_dict, title, y_title):
-    """Create interactive stacked bar chart"""
+    """
+    Create stacked bar chart for showing composition data.
+    Each bar is divided into segments representing different categories.
+    """
     fig = go.Figure()
     
     colors = get_consistent_color_palette(len(y_data_dict), "analysis")
@@ -615,7 +740,7 @@ def create_interactive_stacked_bar_chart(x_data, y_data_dict, title, y_title):
         title=title,
         xaxis_title='Sequence',
         yaxis_title=y_title,
-        barmode='stack',
+        barmode='stack',  # Stack bars on top of each other
         height=500,
         hovermode='x unified'
     )
@@ -628,13 +753,19 @@ def create_interactive_cai_gc_overlay_plot(
     show_options=None,  
     color='#4ECDC4'
 ):
-    """Create interactive plot with a clickable legend to toggle overlays."""
+    """
+    Create a comprehensive interactive plot with toggleable overlays.
+    
+    This is the "everything at once" view that lets users click legend items
+    to show/hide different features (CAI, GC content, stop codons, slippery sites).
+    Helps identify problematic regions in the sequence.
+    """
     from plotly.subplots import make_subplots
     import plotly.graph_objects as go
 
     fig = make_subplots(specs=[[{"secondary_y": True}]])
 
-    # CAI weights (Visible by default)
+    # CAI weights - always visible by default
     fig.add_trace(
         go.Scatter(
             x=positions,
@@ -650,7 +781,7 @@ def create_interactive_cai_gc_overlay_plot(
         secondary_y=False,
     )
 
-    # GC content (Visible by default)
+    # GC content - always visible by default
     gc_content_25bp = [calculate_gc_window(sequence, pos, 25) for pos in positions]
     fig.add_trace(
         go.Scatter(
@@ -666,28 +797,28 @@ def create_interactive_cai_gc_overlay_plot(
         secondary_y=True,
     )
 
-    # +1 stops (Hidden by default, toggled via legend)
+    # +1 frame stop codons - hidden by default (click legend to show)
     if plus1_stop_positions:
         fig.add_trace(
             go.Bar(
                 x=plus1_stop_positions,
-                y=[100] * len(plus1_stop_positions), # Use 100 to match the GC axis
+                y=[100] * len(plus1_stop_positions),  # Scale to 100 to match GC axis
                 name='+1 Stops',
                 marker_color='#FF6B6B',
                 opacity=0.6,
                 width=0.8,
                 hovertemplate='<b>Position:</b> %{x}<br>+1 Stop Codon<extra></extra>',
-                visible='legendonly'
+                visible='legendonly'  # Hidden until user clicks legend
             ),
             secondary_y=True,
         )
 
-    # -1 stops (Hidden by default, toggled via legend)
+    # -1 frame stop codons - also hidden by default
     if minus1_stop_positions:
         fig.add_trace(
             go.Bar(
                 x=minus1_stop_positions,
-                y=[100] * len(minus1_stop_positions), # Use 100 to match the GC axis
+                y=[100] * len(minus1_stop_positions),
                 name='-1 Stops',
                 marker_color='#4ECDC4',
                 opacity=0.6,
@@ -698,16 +829,16 @@ def create_interactive_cai_gc_overlay_plot(
             secondary_y=True,
         )
 
-    # Slippery sites (Hidden by default, toggled via legend)
+    # Slippery sites (TTTT, TTTC motifs) - hidden by default
     if slippery_positions:
         slippery_aa_positions = [pos['amino_acid_position'] for pos in slippery_positions]
         slippery_motifs = [pos['motif'] for pos in slippery_positions]
         fig.add_trace(
             go.Bar(
                 x=slippery_aa_positions,
-                y=[100] * len(slippery_aa_positions), # Use 100 to match the GC axis
+                y=[100] * len(slippery_aa_positions),
                 name='Slippery Sites',
-                marker_color='#FFD700',
+                marker_color='#FFD700',  # Gold color for visibility
                 opacity=0.6,
                 width=0.8,
                 hovertemplate='<b>Position:</b> %{x}<br>Motif: %{customdata}<extra></extra>',
@@ -717,16 +848,14 @@ def create_interactive_cai_gc_overlay_plot(
             secondary_y=True,
         )
 
+    # Set up axes
     fig.update_xaxes(
         title_text="Amino Acid Position",
-        range=[1, len(amino_acids) + 1],  # Ensure x-axis starts at 1 and covers all positions
-        fixedrange=True  # Prevent zooming out beyond data limits
+        range=[1, len(amino_acids) + 1],  # Start at 1, not 0
+        fixedrange=True  # Don't let user zoom out past data limits
     )
 
-    # Primary Y-axis for CAI
     fig.update_yaxes(title_text="CAI Weight", secondary_y=False, range=[0, 1])
-
-    # Secondary Y-axis for GC Content and event markers
     fig.update_yaxes(
         title_text="GC Content (%) / Events", 
         secondary_y=True, 
@@ -1179,7 +1308,7 @@ def get_minus1_stop_positions(dna_seq):
     return positions
 
 def balanced_optimisation(dna_seq, bias_weight_input=None):
-    """Balanced optimization considering codon usage and +1 frame stops"""
+    """Uses EXACT original equation and bonus system but compares options at each position to avoid skipping"""
     bias_weight = bias_weight_input if bias_weight_input is not None else st.session_state.config.get("bias_weight", BIAS_WEIGHT_DEFAULT)
     
     dna_seq_upper = dna_seq.upper()
@@ -1192,72 +1321,164 @@ def balanced_optimisation(dna_seq, bias_weight_input=None):
         codon = dna_seq_upper[i:i+3]
         protein_str += genetic_code.get(codon, str(Seq(codon).translate()))
     
+    def get_highest_freq_codon(amino_acid):
+        """Get the highest frequency codon for an amino acid"""
+        if amino_acid in aa_to_codons and aa_to_codons[amino_acid]:
+            return max(aa_to_codons[amino_acid], key=lambda x: x[1])[0]
+        else:
+            for codon, aa in genetic_code.items():
+                if aa == amino_acid:
+                    return codon
+            return "NNN"
+    
+    def get_canonical_future_sequence(protein_remainder):
+        """Convert remaining protein to canonical codons"""
+        canonical = ""
+        for aa in protein_remainder:
+            canonical += get_highest_freq_codon(aa)
+        return canonical
+    
+    def calculate_original_bonus(temp_seq, current_pos, num_codons):
+        """
+        EXACT original bonus calculation:
+        - Single codon: check position current_pos + 1, bonus = 1 if stop, 0 otherwise
+        - Two codon: check positions current_pos + 1 and current_pos + 4
+                    bonus = 2 if both stops, 1 if one stop, 0 if no stops
+        """
+        if num_codons == 1:
+            # Single codon: check only current_pos + 1
+            plus1_pos = current_pos + 1
+            if plus1_pos + 3 <= len(temp_seq):
+                codon_plus1 = temp_seq[plus1_pos:plus1_pos+3]
+                if codon_plus1 in PLUS1_STOP_CODONS:
+                    return 1
+            return 0
+        
+        elif num_codons == 2:
+            # Two codon: check current_pos + 1 and current_pos + 4
+            plus1_pos1 = current_pos + 1
+            plus1_pos2 = current_pos + 4
+            
+            stop1 = False
+            stop2 = False
+            
+            if plus1_pos1 + 3 <= len(temp_seq):
+                codon1_plus1 = temp_seq[plus1_pos1:plus1_pos1+3]
+                if codon1_plus1 in PLUS1_STOP_CODONS:
+                    stop1 = True
+            
+            if plus1_pos2 + 3 <= len(temp_seq):
+                codon2_plus1 = temp_seq[plus1_pos2:plus1_pos2+3]
+                if codon2_plus1 in PLUS1_STOP_CODONS:
+                    stop2 = True
+            
+            # Original bonus system: 2 for both, 1 for one, 0 for none
+            if stop1 and stop2:
+                return 2
+            elif stop1 or stop2:
+                return 1
+            else:
+                return 0
+        
+        return 0
+    
+    def evaluate_single_codon(idx, current_optimised, aa):
+        """Evaluate single codon using EXACT original equation"""
+        if aa not in aa_to_codons:
+            current_codon = dna_seq_upper[idx:idx+3]
+            return current_codon, 0
+        
+        remaining_protein = protein_str[len(current_optimised)//3 + 1:]
+        canonical_future = get_canonical_future_sequence(remaining_protein)
+        
+        best_codon = dna_seq_upper[idx:idx+3]
+        best_score = -1
+        
+        # Get current codon frequency for baseline
+        current_codon = dna_seq_upper[idx:idx+3]
+        current_freq = 0
+        for syn_c, freq_val in aa_to_codons[aa]:
+            if syn_c == current_codon:
+                current_freq = freq_val
+                break
+        
+        # Calculate baseline score for current codon
+        temp_seq_orig = current_optimised + current_codon + canonical_future
+        bonus_orig = calculate_original_bonus(temp_seq_orig, len(current_optimised), 1)
+        baseline_score = current_freq + bias_weight * bonus_orig
+        best_score = baseline_score
+        
+        for syn_codon, freq in aa_to_codons[aa]:
+            temp_seq = current_optimised + syn_codon + canonical_future
+            
+            # EXACT ORIGINAL EQUATION: score = frequency + bias_weight * bonus
+            bonus = calculate_original_bonus(temp_seq, len(current_optimised), 1)
+            score = freq + bias_weight * bonus
+            
+            # Deterministic tie-breaking (same as original)
+            if score > best_score or (score == best_score and syn_codon < best_codon):
+                best_score = score
+                best_codon = syn_codon
+        
+        return best_codon, best_score
+    
+    def evaluate_two_codon(idx, current_optimised, aa1, aa2):
+        """Evaluate two-codon using EXACT original equation"""
+        if aa1 not in aa_to_codons or aa2 not in aa_to_codons:
+            return None, None, -1
+        
+        remaining_protein = protein_str[len(current_optimised)//3 + 2:]
+        canonical_future = get_canonical_future_sequence(remaining_protein)
+        
+        best_c1, best_c2 = None, None
+        best_score = -1
+        
+        for c1, f1 in aa_to_codons[aa1]:
+            for c2, f2 in aa_to_codons[aa2]:
+                temp_seq = current_optimised + c1 + c2 + canonical_future
+                
+                # EXACT ORIGINAL EQUATION: score = (f1 * f2) + bias_weight * bonus
+                bonus = calculate_original_bonus(temp_seq, len(current_optimised), 2)
+                score = (f1 * f2) + bias_weight * bonus
+                
+                # Deterministic tie-breaking (same as original)
+                if score > best_score or (score == best_score and c1 + c2 < (best_c1 or "") + (best_c2 or "")):
+                    best_score = score
+                    best_c1, best_c2 = c1, c2
+        
+        return best_c1, best_c2, best_score
+    
     optimised_seq = ""
     idx = 0
+    
     while idx < len(dna_seq_upper) - 2:
         current_codon = dna_seq_upper[idx:idx+3]
         aa = genetic_code.get(current_codon, str(Seq(current_codon).translate()))
-
-        if idx < len(dna_seq_upper) - 5:  # Check for two-codon substitutions
-            next_codon_val = dna_seq_upper[idx+3:idx+6]
-            aa2 = genetic_code.get(next_codon_val, str(Seq(next_codon_val).translate()))
-            candidates = []
-            
-            if aa in aa_to_codons and aa2 in aa_to_codons:
-                for c1, f1 in aa_to_codons[aa]:
-                    for c2, f2 in aa_to_codons[aa2]:
-                        combined = c1 + c2
-                        codon1_plus1 = combined[1:4]
-                        bonus = 0
-                        if codon1_plus1 in PLUS1_STOP_CODONS and combined[2:5] in PLUS1_STOP_CODONS:
-                            bonus += 2
-                        elif codon1_plus1 in PLUS1_STOP_CODONS:
-                            bonus += 1
-                        
-                        score = (f1 * f2) + bias_weight * bonus
-                        candidates.append((score, c1, c2))
-            
-            if candidates:
-                _, best1, best2 = max(candidates)
-                optimised_seq += best1 + best2
-                idx += 6
-                continue
         
-        # Single codon substitution
-        best_codon_val = current_codon
-        current_codon_freq = 0
-        for syn_c, freq_val in aa_to_codons.get(aa, []):
-            if syn_c == current_codon:
-                current_codon_freq = freq_val
-                break
+        # ALWAYS evaluate both single and two-codon options at each position
+        single_codon, single_score = evaluate_single_codon(idx, optimised_seq, aa)
+        best_option = ("single", single_codon, single_score, 3)
         
-        temp_seq_orig = optimised_seq + current_codon + dna_seq_upper[idx+3:]
-        plus1_window_orig_start = len(optimised_seq) + 1
-        bonus_orig = 0
-        if plus1_window_orig_start < len(temp_seq_orig) - 2:
-            codon_plus1_orig = temp_seq_orig[plus1_window_orig_start:plus1_window_orig_start+3]
-            if codon_plus1_orig in PLUS1_STOP_CODONS:
-                bonus_orig = bias_weight
-        best_score = current_codon_freq + bonus_orig
-        
-        for syn_codon, freq in aa_to_codons.get(aa, []):
-            temp_seq = optimised_seq + syn_codon + dna_seq_upper[idx+3:]
-            plus1_codon_start_in_temp = len(optimised_seq) + 1
+        # Two codon option (if possible)
+        if idx < len(dna_seq_upper) - 5:
+            next_codon = dna_seq_upper[idx+3:idx+6]
+            aa2 = genetic_code.get(next_codon, str(Seq(next_codon).translate()))
             
-            bonus_val = 0
-            if plus1_codon_start_in_temp < len(temp_seq) - 2:
-                codon_plus1 = temp_seq[plus1_codon_start_in_temp:plus1_codon_start_in_temp+3]
-                if codon_plus1 in PLUS1_STOP_CODONS:
-                    bonus_val = bias_weight
-            
-            score = freq + bonus_val
-            if score > best_score:
-                best_score = score
-                best_codon_val = syn_codon
+            two_c1, two_c2, two_score = evaluate_two_codon(idx, optimised_seq, aa, aa2)
+            if two_score > best_option[2]:
+                best_option = ("two", (two_c1, two_c2), two_score, 6)
         
-        optimised_seq += best_codon_val
-        idx += 3
-
+        # Apply the best option
+        option_type, codons, score, advance = best_option
+        
+        if option_type == "single":
+            optimised_seq += codons
+        elif option_type == "two":
+            optimised_seq += codons[0] + codons[1]
+        
+        idx += advance
+    
+    # Handle remaining nucleotides
     if idx < len(dna_seq_upper):
         optimised_seq += dna_seq_upper[idx:]
     
@@ -1268,17 +1489,168 @@ def balanced_optimisation(dna_seq, bias_weight_input=None):
         final_protein_str += genetic_code.get(codon, str(Seq(codon).translate()))
 
     if final_protein_str != protein_str:
-        logger.error("Protein sequence changed in balanced optimization!")
+        logger.error("Protein sequence changed in original equation no-skipping optimization!")
         return dna_seq_upper
     
     return optimised_seq
 
-standard_table = CodonTable.unambiguous_dna_by_id[1]
-synonymous_codons = defaultdict(list)
-for codon, aa in standard_table.forward_table.items():
-    synonymous_codons[aa].append(codon)
-for stop in standard_table.stop_codons:
-    synonymous_codons["*"].append(stop)
+def MaxStop(dna_seq, debug=False):
+    dna_seq = dna_seq.upper()
+    original_seq = Seq(dna_seq)
+    protein = str(original_seq.translate(to_stop=False))
+    
+    # Use the same codon tables as balanced optimization
+    genetic_code = st.session_state.genetic_code
+    aa_to_codons = st.session_state.aa_to_codons
+    
+    # Convert aa_to_codons to synonymous_codons format for compatibility
+    synonymous_codons = {}
+    for aa, codon_freq_list in aa_to_codons.items():
+        synonymous_codons[aa] = [codon for codon, freq in codon_freq_list]
+    
+    # Add stop codons if not present
+    if '*' not in synonymous_codons:
+        synonymous_codons['*'] = ['TAA', 'TAG', 'TGA']
+    
+    def get_adenosine_start_codons(aa):
+        """Get codons for amino acid that START with adenosine (A)"""
+        if aa not in synonymous_codons:
+            return []
+        return [codon for codon in synonymous_codons[aa] if codon.startswith('A')]
+    
+    def count_all_plus1_stops(sequence):
+        """Count ALL +1 frame stops in sequence"""
+        stops = 0
+        for pos in range(1, len(sequence) - 2, 3):
+            codon = sequence[pos:pos+3]
+            if len(codon) == 3 and codon in {"TAA", "TAG"}:
+                stops += 1
+                if debug:
+                    print(f"    +1 stop '{codon}' at position {pos}")
+        return stops
+    
+    def get_canonical_future(protein_remainder):
+        """Convert remaining protein to canonical codons"""
+        canonical = ""
+        for aa in protein_remainder:
+            if aa in synonymous_codons and synonymous_codons[aa]:
+                canonical += synonymous_codons[aa][0]
+            else:
+                canonical += "AAA"  # Fallback
+        canonical += "AAAAAAAAAA"  # Extra padding
+        return canonical
+    
+    def find_best_codon_for_position(pos_i, current_optimised_seq, protein_seq):
+        """Find the best single codon for position i, considering all strategies"""
+        codon = dna_seq[pos_i:pos_i+3]
+        aa = str(Seq(codon).translate())
+        current_protein_pos = len(current_optimised_seq) // 3
+        
+        if debug:
+            print(f"\nPosition {pos_i} (protein pos {current_protein_pos}): {codon} ({aa})")
+        
+        # Get remaining protein for canonical future
+        remaining_protein = protein_seq[current_protein_pos + 1:]
+        canonical_future = get_canonical_future(remaining_protein)
+        
+        best_codon = codon
+        best_stops = -1
+        best_reason = "original"
+        
+        if aa not in synonymous_codons:
+            return codon, "no_synonyms"
+        
+        # STRATEGY 1: Check if this position can create TAA via L/V/I + A-starting pattern
+        if (aa in ['L', 'V', 'I'] and 
+            current_protein_pos + 1 < len(protein_seq) and 
+            pos_i + 5 < len(dna_seq)):
+            
+            next_aa = protein_seq[current_protein_pos + 1]
+            a_start_codons = get_adenosine_start_codons(next_aa)
+            
+            if a_start_codons:
+                if debug:
+                    print(f"  Checking L/V/I + A-starting: {aa} + {next_aa}")
+                
+                # Test all combinations to see if we can create TAA
+                for codon1 in synonymous_codons[aa]:
+                    for codon2 in a_start_codons:
+                        combined = codon1 + codon2
+                        # Check +1 frame positions
+                        plus1_codon1 = combined[1:4]
+                        
+                        if plus1_codon1 == 'TAA':
+                            # Build temp sequence to count total stops
+                            temp_seq = current_optimised_seq + codon1 + canonical_future
+                            total_stops = count_all_plus1_stops(temp_seq)
+                            
+                            if debug:
+                                print(f"    TAA opportunity: {codon1} + {codon2} -> {plus1_codon1}, total stops: {total_stops}")
+                            
+                            if total_stops > best_stops:
+                                best_stops = total_stops
+                                best_codon = codon1
+                                best_reason = f"TAA_pattern_with_{codon2}"
+        
+        # STRATEGY 2: Try all synonymous codons for this position
+        for syn_codon in synonymous_codons[aa]:
+            temp_seq = current_optimised_seq + syn_codon + canonical_future
+            total_stops = count_all_plus1_stops(temp_seq)
+            
+            if total_stops > best_stops:
+                best_stops = total_stops
+                best_codon = syn_codon
+                best_reason = "max_stops"
+        
+        if debug:
+            print(f"  Best choice: {best_codon} (reason: {best_reason}, total stops: {best_stops})")
+        
+        return best_codon, best_reason
+    
+    # MAIN OPTIMIZATION LOOP - ALWAYS STEP 3 NUCLEOTIDES
+    optimised_seq = ""
+    i = 0
+    
+    while i < len(dna_seq) - 2:
+        best_codon, reason = find_best_codon_for_position(i, optimised_seq, protein)
+        optimised_seq += best_codon
+        
+        if debug:
+            current_stops = count_all_plus1_stops(optimised_seq)
+            print(f"  Added: {best_codon} (total stops so far: {current_stops})")
+        
+        # ALWAYS ADVANCE BY EXACTLY 3 NUCLEOTIDES
+        i += 3
+    
+    # Handle remaining nucleotides
+    if i < len(dna_seq):
+        optimised_seq += dna_seq[i:]
+    
+    # Final verification
+    final_protein = str(Seq(optimised_seq).translate(to_stop=False))
+    assert final_protein == protein, f"Protein changed! Original: {protein}, Final: {final_protein}"
+    
+    if debug:
+        final_stops = count_all_plus1_stops(optimised_seq)
+        print(f"\nFINAL: {final_stops} total +1 stops")
+        
+        # Show all +1 stops found
+        print("All +1 frame stops found:")
+        for pos in range(1, len(optimised_seq) - 2, 3):
+            codon = optimised_seq[pos:pos+3]
+            if len(codon) == 3 and codon in {"TAA", "TAG"}:
+                print(f"  {codon} at position {pos}")
+    
+    return optimised_seq
+
+def isolated_maxstop_from_terminal(dna_seq_input, debug=False):
+    """
+    Wrapper that calls MaxStop and stores result
+    """
+    optimised_dna = MaxStop(dna_seq_input, debug=debug)
+    st.session_state['maxstop_result_seq'] = optimised_dna
+    return optimised_dna
+
 
 
 
@@ -1371,232 +1743,6 @@ def create_download_link(df, filename):
     processed_data = output.getvalue()
     return processed_data
 
-def run_terminal_maxstop(dna_seq):
-    """
-    A self-contained implementation of the user's terminal script logic for MaxStop.
-    This uses its own BioPython-derived codon table and is completely isolated
-    from the Streamlit app's session state and codon files for debugging.
-    """
-    from collections import defaultdict
-    from Bio.Seq import Seq
-    from Bio.Data import CodonTable
-
-    standard_table = CodonTable.unambiguous_dna_by_id[1]
-    synonymous_codons = defaultdict(list)
-    for codon, aa in standard_table.forward_table.items():
-        synonymous_codons[aa].append(codon)
-    for stop in standard_table.stop_codons:
-        synonymous_codons["*"].append(stop)
-
-    def terminal_stop_codon_optimisation(seq_to_optimize):
-        seq_to_optimize = seq_to_optimize.upper().replace("\n", "").replace(" ", "")
-        original_seq_obj = Seq(seq_to_optimize)
-        protein = original_seq_obj.translate(to_stop=False)
-
-        optimised_seq = ""
-        i = 0
-        while i < len(seq_to_optimize) - 2:
-            codon = seq_to_optimize[i:i+3]
-            try:
-                aa_seq = Seq(codon).translate()
-                aa = str(aa_seq)
-            except Exception:
-                optimised_seq += codon
-                i += 3
-                continue
-
-            if i < len(seq_to_optimize) - 5:
-                codon2 = seq_to_optimize[i+3:i+6]
-                try:
-                    aa2_seq = Seq(codon2).translate()
-                    aa2 = str(aa2_seq)
-                    double_subs = [
-                        (c1, c2) for c1 in synonymous_codons[aa]
-                                 for c2 in synonymous_codons[aa2]
-                                 if (c1 + c2)[1:7] in {"TAATAA", "TAGTAG"}
-                    ]
-                    if double_subs:
-                        best_c1, best_c2 = double_subs[0]
-                        optimised_seq += best_c1 + best_c2
-                        i += 6
-                        continue
-                except Exception:
-                    pass
-
-            best_codon = codon
-            for syn in synonymous_codons[aa]:
-                temp_seq = optimised_seq + syn + seq_to_optimize[i+3:]
-                plus1 = temp_seq[1:]
-                codon_in_plus1 = plus1[i:i+3]
-                if codon_in_plus1 in {"TAA", "TAG"}:
-                    best_codon = syn
-                    break
-            optimised_seq += best_codon
-            i += 3
-        
-        if i < len(seq_to_optimize):
-            optimised_seq += seq_to_optimize[i:]
-
-        try:
-            final_protein = Seq(optimised_seq).translate(to_stop=False)
-            assert str(final_protein) == str(protein)
-        except AssertionError:
-            try:
-                logger.error("Protein sequence changed during isolated MaxStop. Reverting.")
-            except NameError:
-                print("ERROR: Protein sequence changed during isolated MaxStop. Reverting.")
-            return seq_to_optimize
-        return optimised_seq
-
-   
-    optimised_dna = terminal_stop_codon_optimisation(dna_seq)
-
-    st.session_state['maxstop_result_seq'] = optimised_dna
-    
-    return optimised_dna
-
-def nc_stop_codon_optimisation(dna_seq, codon_table=NC_synonymous_codons):
-    """
-    MaxStop NC stop codon optimisation for Streamlit.
-    Optimized for consistency using defined global codon tables.
-    """
-    dna_seq = dna_seq.upper().replace("\n", "").replace(" ", "")
-    
-    # Use Biopython's translation for the original protein sequence
-    original_seq = Seq(dna_seq)
-    protein = original_seq.translate(to_stop=False)
-
-    optimised_seq = ""
-    i = 0
-    while i < len(dna_seq) - 2:
-        codon = dna_seq[i:i+3]
-  
-        aa = STANDARD_GENETIC_CODE.get(codon, str(Seq(codon).translate()))
-
-        # --- Check for consecutive stop codon motifs ---
-        if i < len(dna_seq) - 5:
-            codon2 = dna_seq[i+3:i+6]
-            aa2 = STANDARD_GENETIC_CODE.get(codon2, str(Seq(codon2).translate()))
-            
-            # Use the provided codon_table (defaulting to NC_synonymous_codons)
-            syns1 = codon_table.get(aa, [])
-            syns2 = codon_table.get(aa2, [])
-
-            double_subs = [
-                (c1, c2) for c1 in syns1
-                         for c2 in syns2
-                         # Check for +1 frame stop codon motifs (TAATAA, TAGTAG)
-                         if (c1 + c2)[1:7] in {"TAATAA", "TAGTAG"}
-            ]
-            
-            if double_subs:
-                best_c1, best_c2 = double_subs[0]
-                optimised_seq += best_c1 + best_c2
-                i += 6
-                continue
-
-        # --- Check for single +1 stop codon bias ---
-        best_codon = codon
-        synonyms = codon_table.get(aa, [])
-        
-        for syn in synonyms:
-            temp_seq = optimised_seq + syn + dna_seq[i+3:]
-            
-            plus1 = temp_seq[1:]
-            
-            codon_in_plus1 = plus1[i:i+3]
-            
-            if codon_in_plus1 in {"TAA", "TAG"}:
-                best_codon = syn
-                break
-
-        optimised_seq += best_codon
-        i += 3
-
-    final_protein = Seq(optimised_seq).translate(to_stop=False)
-    assert str(final_protein) == str(protein), "Protein sequence changed! Check AA translation logic."
-
-    return optimised_seq
-
-def isolated_maxstop_from_terminal(dna_seq_input):
-    """
-    A completely isolated, copy-pasted version of the user's terminal script.
-    All variables and functions are local to this scope to prevent any clashes.
-    It takes a DNA sequence and returns the optimized version.
-    """
-    from collections import defaultdict
-    from Bio.Seq import Seq
-    from Bio.Data import CodonTable
-
-    terminal_standard_table = CodonTable.unambiguous_dna_by_id[1]
-    terminal_synonymous_codons = defaultdict(list)
-    for codon, aa in terminal_standard_table.forward_table.items():
-        terminal_synonymous_codons[aa].append(codon)
-    for stop in terminal_standard_table.stop_codons:
-        terminal_synonymous_codons["*"].append(stop)
-
-    def terminal_stop_codon_optimisation(dna_seq):
-        dna_seq = dna_seq.upper()
-        original_seq = Seq(dna_seq)
-        protein = original_seq.translate(to_stop=False)
-
-        optimised_seq = ""
-        i = 0
-        while i < len(dna_seq) - 2:
-            codon = dna_seq[i:i+3]
-            try:
-                aa = str(Seq(codon).translate())
-            except Exception:
-                optimised_seq += codon
-                i += 3
-                continue
-            
-            if i < len(dna_seq) - 5:
-                codon2 = dna_seq[i+3:i+6]
-                try:
-                    aa2 = str(Seq(codon2).translate())
-                    double_subs = [
-                        (c1, c2) for c1 in terminal_synonymous_codons[aa]
-                                 for c2 in terminal_synonymous_codons[aa2]
-                                 if (c1 + c2)[1:7] in {"TAATAA", "TAGTAG"}
-                    ]
-                    if double_subs:
-                        best_c1, best_c2 = double_subs[0]
-                        optimised_seq += best_c1 + best_c2
-                        i += 6
-                        continue
-                except Exception:
-                    pass
-
-            # single stop codon addition; bias for UAA and UAG
-            best_codon = codon
-            for syn in terminal_synonymous_codons[aa]:
-                temp_seq = optimised_seq + syn + dna_seq[i+3:]
-                plus1 = temp_seq[1:]
-                codon_in_plus1 = plus1[i:i+3]
-                if codon_in_plus1 in {"TAA", "TAG"}:
-                    best_codon = syn
-                    break
-            optimised_seq += best_codon
-            i += 3
-
-        if i < len(dna_seq):
-            optimised_seq += dna_seq[i:]
-
-        try:
-            final_protein = Seq(optimised_seq).translate(to_stop=False)
-            assert str(final_protein) == str(protein)
-        except AssertionError:
-            return dna_seq
-
-        return optimised_seq
-
-    
-    optimised_dna = terminal_stop_codon_optimisation(dna_seq_input)
- 
-    st.session_state['maxstop_result_seq'] = optimised_dna
-    
-    return optimised_dna
 
 
 def run_single_optimization(sequence, method, bias_weight=None):
@@ -1941,19 +2087,20 @@ def main():
         
         st.divider()
         
-        # Algorithm settings
         st.subheader("Algorithm Settings")
+
         bias_weight = st.slider(
             "Bias Weight (Balanced Optimization)", 
-            min_value=0.01, 
+            min_value=0.0, 
             max_value=1.0, 
             value=float(st.session_state.config.get("bias_weight", BIAS_WEIGHT_DEFAULT)),
-            step=0.1,
+            step=0.01,  # smaller step for finer control
             help="Weight for +1 frame stop codon bias in balanced optimization"
         )
+
         st.session_state.config["bias_weight"] = bias_weight
-        
         st.divider()
+
         
         # Theme selection
         st.subheader("Appearance")
@@ -3600,6 +3747,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-    
-    
-    
