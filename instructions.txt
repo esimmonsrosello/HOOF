@@ -1,5 +1,4 @@
-For Mac/Linux
-
+For Mac/Linux:
 # 1. Navigate to your project folder
 cd "/path/to/your/project/folder"
 
@@ -25,12 +24,14 @@ python -c "import streamlit; import plotly; import matplotlib; print('All packag
 
 # 8. Run the Streamlit app
 streamlit run HOOF.py
+# streamlit run HOOF.v4.demo.py
 
 # When done:
 # 9. Stop the app: Press CTRL + C in terminal
 # 10. Deactivate the virtual environment: deactivate
 
-For Windows: 
+
+For Windows
 
 # 1. Navigate to your project folder
 cd "C:\path\to\your\project\folder"
@@ -39,9 +40,13 @@ cd "C:\path\to\your\project\folder"
 python -m venv .venv
 
 # 3. Activate the virtual environment
-.venv\Scripts\activate
+PowerShell:
+.venv\Scripts\Activate
 
-# 4. IMPORTANT: Upgrade pip first
+Command Prompt (cmd.exe):
+.venv\Scripts\activate.bat
+
+# 4. Upgrade pip (important)
 pip install --upgrade pip
 
 # 5. Install wheel and setuptools
@@ -55,8 +60,10 @@ python -c "import streamlit; import plotly; import matplotlib; print('All packag
 
 # 8. Run the Streamlit app
 streamlit run HOOF.py
+# streamlit run HOOF.v4.demo.py
 
-# When done:
-# 9. Stop the app: Press CTRL + C in terminal
+# 9. Stop the app when finished
+Press CTRL + C in the terminal
+
 # 10. Deactivate the virtual environment
 deactivate
