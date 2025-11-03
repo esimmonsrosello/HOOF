@@ -1,6 +1,6 @@
 # HOOF: Harmonised Optimization of Oligos and Frames
 
-**HOOF** is a professional bioinformatics application for sequence optimization and analysis. It integrates multiple optimization algorithms with comprehensive analytical tools, all accessible through an intuitive **Streamlit** interface. Both demo (HOOF.v4.demo.py) and full software (HOOF.py) available. 
+**HOOF** is a professional bioinformatics application for sequence optimization and analysis. It integrates multiple optimization algorithms with comprehensive analytical tools, all accessible through an intuitive **Streamlit** interface. Both demo (HOOF.v4.demo.py) and full software (HOOF.py) available. Demo includes test sequences GFP, Firefly luciferase, and OVA only. 
 
 **Typical install time** about a minute for both full software and demo. 
 
@@ -44,7 +44,7 @@ All necessary files are included in this GitHub repository.
 ## File Structure
 
 ```
-├── HOOF.py       # Main Streamlit application
+├── HOOF.v3.minimal.py       # Main Streamlit application
 ├── requirements.txt         # Python dependencies
 ├── README.md                # This file
 └── HumanCodons.xlsx         # Codon usage data
@@ -66,4 +66,6 @@ All necessary files are included in this GitHub repository.
 ## Support
 
 For issues or questions, refer to the "About" tab within the application for detailed method descriptions and requirements.
+
+
 
